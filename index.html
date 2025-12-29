@@ -112,20 +112,18 @@
 <script>
 /* ------------------------------
   主要變數與 UI 元件
-   - GPS 用 watchPosition 計算真實距離（Haversine）
-   - 儲存紀錄用 localStorage（key: running_records）
-   - 步頻節拍器用 AudioContext 輕聲 beep
 -------------------------------*/
-let cadence = 170;            // BPM (170-230)
+let cadence = 170;            
 let metronomeTimer = null;
 let audioCtx = null;
 
-let runStart = null;         // timestamp ms
-let runElapsedSec = 0;       // seconds
+let runStart = null;         
+let runElapsedSec = 0;       
 let runTimer = null;
 let watchId = null;
 let lastPos = null;
-let totalDistance = 0;       // meters
+let totalDistance = 0;       
+let lastAnnouncedKm = 0;      // 新增：追蹤已播報的公里數
 
 const cadenceEl = document.getElementById('cadence');
 const cadenceSmall = document.getElementById('cadenceDisplaySmall');
@@ -136,6 +134,24 @@ const gpsStatus = document.getElementById('gpsStatus');
 const pulse = document.getElementById('pulse');
 
 const RECORD_KEY = 'running_records_v1';
+
+/* ---------- 語音播報功能 ---------- */
+function announcePace(km, paceSec) {
+  if (!('speechSynthesis' in window)) return;
+
+  const mins = Math.floor(paceSec / 60);
+  const secs = Math.round(paceSec % 60);
+  
+  // 播報文字內容
+  const text = `達成 ${km} 公里，平均配速 ${mins} 分 ${secs} 秒。`;
+  
+  const msg = new SpeechSynthesisUtterance(text);
+  msg.lang = 'zh-TW'; 
+  msg.rate = 1.0;     
+  msg.pitch = 1.0;    
+  
+  window.speechSynthesis.speak(msg);
+}
 
 /* ---------- 儲存/載入紀錄 ---------- */
 function loadRecords(){
@@ -149,7 +165,7 @@ function loadRecords(){
 }
 function saveRecord(record){
   const arr = loadRecords();
-  arr.unshift(record); // 新的在前
+  arr.unshift(record); 
   localStorage.setItem(RECORD_KEY, JSON.stringify(arr));
   renderRecords();
 }
@@ -187,8 +203,7 @@ function restoreRecord(index){
   const arr = loadRecords();
   const r = arr[index];
   if(!r) return;
-  alert('示範回復：將顯示該紀錄數據（不會覆蓋目前進行中的跑步）');
-  // 示範：直接顯示
+  alert('示範回復：將顯示該紀錄數據');
   timeDisplay.textContent = r.duration || '00:00:00';
   distanceDisplay.textContent = r.distance;
   paceDisplay.textContent = r.avgPace;
@@ -260,7 +275,7 @@ function playBeep(){
 
 /* ---------- GPS 與跑步計算 ---------- */
 function haversine(lat1, lon1, lat2, lon2){
-  const R = 6371000; // m
+  const R = 6371000; 
   const toRad = x => x * Math.PI / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -271,17 +286,15 @@ function haversine(lat1, lon1, lat2, lon2){
 
 function startRun(){
   if(runTimer) { alert('已在跑步中'); return; }
-  // init
   runStart = Date.now();
   runElapsedSec = 0;
   totalDistance = 0;
   lastPos = null;
+  lastAnnouncedKm = 0; // 重置語音播報紀錄
   updateDisplays();
 
-  // start timer
   runTimer = setInterval(()=>{ runElapsedSec = Math.floor((Date.now() - runStart)/1000); updateDisplays(); }, 1000);
 
-  // start GPS watch
   if('geolocation' in navigator){
     gpsStatus.textContent = '嘗試取得定位...';
     watchId = navigator.geolocation.watchPosition(pos => {
@@ -289,24 +302,19 @@ function startRun(){
       const {latitude, longitude} = pos.coords;
       if(lastPos){
         const d = haversine(lastPos.latitude, lastPos.longitude, latitude, longitude);
-        // 過濾過長的跳躍（例如數百公尺），可視 accuracy 決定是否接受
-        if(pos.coords.accuracy < 50 || d < 20) { // 精準或小位移才累加
+        if(pos.coords.accuracy < 50 || d < 20) { 
           totalDistance += d;
-        } else {
-          // 若 accuracy 很差 (>50m) 且位移驟大，跳過累加，避免跳點
         }
       }
       lastPos = {latitude, longitude, timestamp: pos.timestamp};
       updateDisplays();
     }, err => {
       gpsStatus.textContent = '定位失敗：' + err.message;
-      console.warn('geo err', err);
-    }, {enableHighAccuracy:true, maximumAge:0, timeout:15000}); // <--- 參數已調整
+    }, {enableHighAccuracy:true, maximumAge:0, timeout:15000});
   } else {
     gpsStatus.textContent = '此裝置不支援定位';
   }
 
-  // Optionally start metronome with cadence when run begins
   if(!metronomeTimer) startMetronome();
 }
 
@@ -321,12 +329,10 @@ function pauseRun(){
 
 function stopRun(){
   if(!runStart) return;
-  // stop timers
   if(runTimer) { clearInterval(runTimer); runTimer = null; }
   if(watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
   if(metronomeTimer) stopMetronome();
 
-  // compute final stats
   const elapsed = Math.floor((Date.now() - runStart)/1000);
   const km = (totalDistance/1000);
   const durationStr = formatDuration(elapsed);
@@ -340,11 +346,11 @@ function stopRun(){
   };
   saveRecord(rec);
 
-  // reset running state but keep display
   runStart = null;
   runElapsedSec = 0;
   lastPos = null;
   totalDistance = 0;
+  lastAnnouncedKm = 0;
   gpsStatus.textContent = '已結束';
   alert('已儲存紀錄：' + rec.date + '，距離 ' + rec.distance + ' km');
 }
@@ -357,24 +363,30 @@ function resetRun(){
   if(watchId){ navigator.geolocation.clearWatch(watchId); watchId=null; }
   if(metronomeTimer) stopMetronome();
   runStart = null; runElapsedSec = 0; totalDistance = 0; lastPos=null;
+  lastAnnouncedKm = 0; // 重置語音播報紀錄
   updateDisplays();
   gpsStatus.textContent = '尚未啟用';
 }
 
 /* ---------- 顯示更新 ---------- */
 function updateDisplays(){
-  // time
   let elapsed = runStart ? Math.floor((Date.now()-runStart)/1000) : runElapsedSec;
   const h = String(Math.floor(elapsed / 3600)).padStart(2,'0');
   const m = String(Math.floor((elapsed % 3600)/60)).padStart(2,'0');
   const s = String(elapsed % 60).padStart(2,'0');
   timeDisplay.textContent = `${h}:${m}:${s}`;
 
-  // distance
   const km = totalDistance / 1000;
   distanceDisplay.textContent = km.toFixed(2);
 
-  // pace (sec per km)
+  // --- 語音播報邏輯 ---
+  const currentFullKm = Math.floor(km);
+  if (currentFullKm > lastAnnouncedKm && currentFullKm > 0) {
+    lastAnnouncedKm = currentFullKm;
+    const paceSecPerKm = Math.floor(elapsed / km);
+    announcePace(currentFullKm, paceSecPerKm);
+  }
+
   if(km > 0.001){
     const paceSecPerKm = Math.floor(elapsed / km);
     paceDisplay.textContent = formatPace(paceSecPerKm);
@@ -397,31 +409,9 @@ function formatPace(paceSec){
   return `${m}:${String(s).padStart(2,'0')}`;
 }
 
-/* ---------- 初始化 ---------- */
 updateCadenceUI();
 renderRecords();
 
-/* PWA install prompt handling (optional) */
-let deferredPrompt;
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  // 可以顯示一個按鈕讓使用者點選安裝
-  console.log('install prompt ready');
-});
-function promptInstall(){
-  if(deferredPrompt){
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then(choice => {
-      if(choice.outcome === 'accepted'){ console.log('User accepted install'); }
-      deferredPrompt = null;
-    });
-  } else {
-    alert('安裝提示尚未觸發 — 請確保以 HTTPS 開啟且為支援 PWA 的瀏覽器');
-  }
-}
 </script>
-
 </body>
 </html>
-
